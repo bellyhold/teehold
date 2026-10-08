@@ -1,0 +1,158 @@
+// TeeHold — golf coach booking + deposits
+// https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum DepositType {
+  fixed
+  percent
+}
+
+enum PlanStatus {
+  trial
+  active
+  canceled
+}
+
+enum BookingStatus {
+  pending_payment
+  confirmed
+  canceled
+  completed
+  no_show
+}
+
+enum DepositStatus {
+  unpaid
+  paid
+  refunded
+}
+
+model Coach {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  passwordHash String
+  name      String
+  businessName String?
+  timezone  String   @default("America/New_York")
+  bio       String?
+  photoUrl  String?
+  publicSlug String  @unique
+
+  lessonDurationMin Int @default(60)
+  lessonPriceCents  Int @default(10000)
+  depositType       DepositType @default(fixed)
+  depositFixedCents Int @default(2500)
+  depositPercent    Int @default(25)
+  bufferMin         Int @default(15)
+  cancellationHours Int @default(24)
+  reminderHoursBefore Int @default(24)
+
+  stripeCustomerId       String?
+  stripeSubscriptionId   String?
+  stripeConnectAccountId String?
+  plan                   PlanStatus @default(trial)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  availabilityRules      AvailabilityRule[]
+  availabilityExceptions AvailabilityException[]
+  lessonTypes            LessonType[]
+  bookings               Booking[]
+  clientNotes            ClientNote[]
+}
+
+model AvailabilityRule {
+  id        String @id @default(cuid())
+  coachId   String
+  weekday   Int // 0=Sun … 6=Sat
+  startTime String // "09:00"
+  endTime   String // "17:00"
+  locationLabel String?
+
+  coach Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  @@index([coachId])
+}
+
+model AvailabilityException {
+  id        String  @id @default(cuid())
+  coachId   String
+  date      String // "YYYY-MM-DD"
+  isBlocked Boolean @default(true)
+  startTime String?
+  endTime   String?
+  locationLabel String?
+
+  coach Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  @@index([coachId, date])
+}
+
+model LessonType {
+  id           String  @id @default(cuid())
+  coachId      String
+  name         String
+  durationMin  Int
+  priceCents   Int
+  isActive     Boolean @default(true)
+
+  coach    Coach     @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  @@index([coachId])
+}
+
+model Booking {
+  id           String @id @default(cuid())
+  coachId      String
+  lessonTypeId String?
+
+  startsAt DateTime
+  endsAt   DateTime
+
+  clientName  String
+  clientEmail String
+  clientPhone String?
+
+  status        BookingStatus @default(pending_payment)
+  depositCents  Int
+  depositStatus DepositStatus @default(unpaid)
+
+  stripeCheckoutSessionId String?
+  stripePaymentIntentId   String?
+  cancelToken             String  @unique
+
+  notes          String?
+  reminderSentAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  coach      Coach       @relation(fields: [coachId], references: [id], onDelete: Cascade)
+  lessonType LessonType? @relation(fields: [lessonTypeId], references: [id])
+
+  @@unique([coachId, startsAt])
+  @@index([coachId, startsAt])
+  @@index([clientEmail])
+}
+
+model ClientNote {
+  id          String   @id @default(cuid())
+  coachId     String
+  clientEmail String
+  note        String
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  coach Coach @relation(fields: [coachId], references: [id], onDelete: Cascade)
+
+  @@unique([coachId, clientEmail])
+}

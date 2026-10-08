@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { prisma } from "@/lib/db";
 import { stripeWebhookSecretConfigured } from "@/lib/billing";
-import { getStripe, stripeConfigured } from "@/lib/stripe";
+import { formatUsd } from "@/lib/money";
+import {
+  notifyBookingConfirmed,
+  notifyCoachNewBooking,
+} from "@/lib/notify";
+import { appUrl, getStripe, stripeConfigured } from "@/lib/stripe";
 
 export const runtime = "nodejs";
 
@@ -42,7 +47,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         ? session.payment_intent
         : session.payment_intent?.id ?? null;
 
-    await prisma.booking.update({
+    const booking = await prisma.booking.update({
       where: { id: bookingId },
       data: {
         status: "confirmed",
@@ -52,7 +57,32 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
           ? { stripePaymentIntentId: paymentIntentId }
           : {}),
       },
+      include: {
+        coach: {
+          select: {
+            email: true,
+            name: true,
+            businessName: true,
+          },
+        },
+      },
     });
+
+    const coachLabel = booking.coach.businessName || booking.coach.name;
+    await Promise.all([
+      notifyBookingConfirmed({
+        to: booking.clientEmail,
+        coachName: coachLabel,
+        startsAt: booking.startsAt,
+        depositUsd: formatUsd(booking.depositCents),
+        cancelUrl: appUrl(`/c/cancel/${booking.cancelToken}`),
+      }),
+      notifyCoachNewBooking({
+        to: booking.coach.email,
+        clientName: booking.clientName,
+        startsAt: booking.startsAt,
+      }),
+    ]);
   }
 }
 

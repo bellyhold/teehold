@@ -1,9 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
-  cacheComponents: true,
-  partialPrefetching: true,
+  // Auth cookies + Stripe webhooks need classic dynamic routes.
+  // cacheComponents conflicts with `dynamic` / `runtime` segment config.
   turbopack: {
     rules: {
       "*.css": {

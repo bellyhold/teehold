@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 import { requireCoach } from "@/lib/auth";
 import { LogoutButton } from "./logout-button";
 
+export const dynamic = "force-dynamic";
+
 export default async function CoachAppLayout({ children }: { children: React.ReactNode }) {
   const coach = await requireCoach();
   if (!coach) redirect("/login");

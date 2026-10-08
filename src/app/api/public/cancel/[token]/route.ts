@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { subHours, isBefore } from "date-fns";
 import { prisma } from "@/lib/db";
+import { refundBookingDeposit } from "@/lib/billing";
 import { formatUsd } from "@/lib/money";
 
 type Params = { params: Promise<{ token: string }> };
@@ -50,7 +51,7 @@ export async function GET(_req: Request, { params }: Params) {
     cancelDeadline: deadline.toISOString(),
     canCancel,
     refundNote:
-      "Deposit refunds (if eligible) are handled by Stripe billing — Agent C.",
+      "Eligible cancels refund a paid deposit via Stripe when configured.",
     coach: {
       name: booking.coach.name,
       businessName: booking.coach.businessName,
@@ -83,8 +84,7 @@ export async function POST(_req: Request, { params }: Params) {
       ok: true,
       status: "canceled",
       message: "Booking already canceled",
-      refundNote:
-        "Deposit refunds (if eligible) are handled by Stripe billing — Agent C.",
+      refundNote: "Already canceled",
     });
   }
 
@@ -109,6 +109,11 @@ export async function POST(_req: Request, { params }: Params) {
     );
   }
 
+  const refund =
+    booking.depositStatus === "paid"
+      ? await refundBookingDeposit(booking.id)
+      : { refunded: false, reason: "No paid deposit" };
+
   const updated = await prisma.booking.update({
     where: { id: booking.id },
     data: { status: "canceled" },
@@ -119,8 +124,7 @@ export async function POST(_req: Request, { params }: Params) {
     bookingId: updated.id,
     status: updated.status,
     message: "Booking canceled",
-    refundNote:
-      "If a deposit was paid, refunds are processed via Stripe (Agent C). This route only marks the booking canceled.",
+    refund,
     coachSlug: booking.coach.publicSlug,
   });
 }

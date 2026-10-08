@@ -3,12 +3,17 @@ import { addMinutes } from "date-fns";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
-import { computeDepositCents } from "@/lib/money";
+import { computeDepositCents, formatUsd } from "@/lib/money";
 import {
   BillingNotConfiguredError,
   createDepositCheckoutForBooking,
   stripeConfigured,
 } from "@/lib/billing";
+import { appUrl } from "@/lib/stripe";
+import {
+  notifyBookingConfirmed,
+  notifyCoachNewBooking,
+} from "@/lib/notify";
 
 type Params = { params: Promise<{ slug: string }> };
 
@@ -55,6 +60,9 @@ export async function POST(req: Request, { params }: Params) {
     where: { publicSlug: slug },
     select: {
       id: true,
+      email: true,
+      name: true,
+      businessName: true,
       publicSlug: true,
       lessonDurationMin: true,
       lessonPriceCents: true,
@@ -110,6 +118,8 @@ export async function POST(req: Request, { params }: Params) {
 
   let checkoutUrl: string | null = null;
   let message = "Pay deposit next";
+  const cancelPath = `/c/cancel/${booking.cancelToken}`;
+  const coachLabel = coach.businessName || coach.name;
 
   if (stripeConfigured()) {
     try {
@@ -123,6 +133,28 @@ export async function POST(req: Request, { params }: Params) {
       message =
         "Booking held — deposit checkout could not start. Pay deposit next (Stripe).";
     }
+  } else {
+    // Local/dev without Stripe: confirm so coach dashboard + emails still work.
+    booking = await prisma.booking.update({
+      where: { id: booking.id },
+      data: { status: "confirmed" },
+    });
+    message =
+      "Booked (dev mode — Stripe not configured, deposit skipped). Confirmation emailed if Resend is set.";
+    await Promise.all([
+      notifyBookingConfirmed({
+        to: booking.clientEmail,
+        coachName: coachLabel,
+        startsAt: booking.startsAt,
+        depositUsd: formatUsd(booking.depositCents),
+        cancelUrl: appUrl(cancelPath),
+      }),
+      notifyCoachNewBooking({
+        to: coach.email,
+        clientName: booking.clientName,
+        startsAt: booking.startsAt,
+      }),
+    ]);
   }
 
   return NextResponse.json(
@@ -130,11 +162,12 @@ export async function POST(req: Request, { params }: Params) {
       bookingId: booking.id,
       cancelToken: booking.cancelToken,
       depositCents: booking.depositCents,
+      status: booking.status,
       startsAt: booking.startsAt.toISOString(),
       endsAt: booking.endsAt.toISOString(),
       checkoutUrl,
       message,
-      cancelUrl: `/c/cancel/${booking.cancelToken}`,
+      cancelUrl: cancelPath,
     },
     { status: 201 },
   );

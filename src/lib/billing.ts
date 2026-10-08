@@ -215,3 +215,52 @@ export async function createConnectOnboardingLink(
 
   return { url: link.url };
 }
+
+/** Refund a paid deposit when canceling (best-effort). */
+export async function refundBookingDeposit(
+  bookingId: string
+): Promise<{ refunded: boolean; reason?: string }> {
+  if (!stripeConfigured()) {
+    return { refunded: false, reason: "Stripe not configured" };
+  }
+
+  const booking = await prisma.booking.findUnique({ where: { id: bookingId } });
+  if (!booking) return { refunded: false, reason: "Booking not found" };
+  if (booking.depositStatus === "refunded") {
+    return { refunded: true, reason: "Already refunded" };
+  }
+  if (booking.depositStatus !== "paid") {
+    return { refunded: false, reason: "Deposit was not paid" };
+  }
+
+  const stripe = requireStripe();
+  try {
+    if (booking.stripePaymentIntentId) {
+      await stripe.refunds.create({
+        payment_intent: booking.stripePaymentIntentId,
+      });
+    } else if (booking.stripeCheckoutSessionId) {
+      const session = await stripe.checkout.sessions.retrieve(
+        booking.stripeCheckoutSessionId
+      );
+      const pi =
+        typeof session.payment_intent === "string"
+          ? session.payment_intent
+          : session.payment_intent?.id;
+      if (!pi) return { refunded: false, reason: "No payment intent on session" };
+      await stripe.refunds.create({ payment_intent: pi });
+    } else {
+      return { refunded: false, reason: "No Stripe payment on booking" };
+    }
+
+    await prisma.booking.update({
+      where: { id: booking.id },
+      data: { depositStatus: "refunded" },
+    });
+    return { refunded: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Refund failed";
+    console.error("[refundBookingDeposit]", message);
+    return { refunded: false, reason: message };
+  }
+}
